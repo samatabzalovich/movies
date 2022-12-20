@@ -1,0 +1,2 @@
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+ALTER TABLE movies ALTER COLUMN version SET DATA TYPE UUID USING (uuid_generate_v4());
