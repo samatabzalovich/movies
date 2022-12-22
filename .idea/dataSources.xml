@@ -8,5 +8,12 @@
       <jdbc-url>jdbc:postgresql://localhost:5432/greenlight</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
+    <data-source source="LOCAL" name="greenlight@localhost [2]" uuid="6c6b9951-9089-4078-bca9-8e5ee7d86d1b">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://localhost:5432/greenlight</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
   </component>
 </project>

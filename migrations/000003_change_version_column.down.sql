@@ -1,0 +1,3 @@
+ALTER TABLE movies DROP COLUMN version;
+ALTER TABLE movies ADD COLUMN version integer DEFAULT 1;
+ALTER TABLE movies ALTER COLUMN version SET NOT NULL;
