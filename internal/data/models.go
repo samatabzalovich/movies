@@ -3,6 +3,7 @@ package data
 import (
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"net/http"
 )
 
 // Define a custom ErrRecordNotFound error. We'll return this from our Get() method when
@@ -15,7 +16,7 @@ var (
 // like a UserModel and PermissionModel, as our build progresses.
 type Models struct {
 	Movies interface {
-		Insert(movie *Movie) error
+		Insert(movie *Movie, r *http.Request) error
 		Get(id int64) (*Movie, error)
 		Update(movie *Movie) error
 		Delete(id int64) error
@@ -25,8 +26,9 @@ type Models struct {
 // For ease of use, we also add a New() method which returns a Models struct containing
 // the initialized MovieModel.
 func NewModels(db *pgxpool.Pool) Models {
+	m := MovieModel{DB: db}
 	return Models{
-		Movies: MovieModel{DB: db},
+		Movies: m,
 	}
 }
 

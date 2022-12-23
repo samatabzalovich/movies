@@ -3,6 +3,7 @@ package data
 import (
 	"awesomeProject2/internal/validator"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"net/http"
 	"time"
 )
 
@@ -36,8 +37,21 @@ type MovieModel struct {
 }
 
 // Add a placeholder method for inserting a new record in the movies table.
-func (m MovieModel) Insert(movie *Movie) error {
-	return nil
+// The Insert() method accepts a pointer to a movie struct, which should contain the
+// data for the new record.
+func (m MovieModel) Insert(movie *Movie, r *http.Request) error {
+	// Define the SQL query for inserting a new record in the movies table and returning
+	// the system-generated data.
+	query := `INSERT INTO movies (title, year, runtime, genres) VALUES ($1, $2, $3, $4) 
+                                                  RETURNING id, created_at, version`
+	// Create an args slice containing the values for the placeholder parameters from
+	// the movie struct. Declaring this slice immediately next to our SQL query helps to
+	// make it nice and clear *what values are being used where* in the query.
+	args := []any{movie.Title, movie.Year, movie.Runtime, movie.Genres}
+	// Use the QueryRow() method to execute the SQL query on our connection pool,
+	// passing in the args slice as a variadic parameter and scanning the system-
+	// generated id, created_at and version values into the movie struct.
+	return m.DB.QueryRow(r.Context(), query, args...).Scan(&movie.ID, &movie.CreatedAt, &movie.Version)
 }
 
 // Add a placeholder method for fetching a specific record from the movies table.
@@ -57,7 +71,7 @@ func (m MovieModel) Delete(id int64) error {
 
 type MockMovieModel struct{}
 
-func (m MockMovieModel) Insert(movie *Movie) error {
+func (m MockMovieModel) Insert(movie *Movie, r *http.Request) error {
 	return nil
 }
 func (m MockMovieModel) Get(id int64) (*Movie, error) {
