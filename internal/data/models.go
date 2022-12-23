@@ -18,8 +18,8 @@ type Models struct {
 	Movies interface {
 		Insert(movie *Movie, r *http.Request) error
 		Get(id int64) (*Movie, error)
-		Update(movie *Movie) error
-		Delete(id int64) error
+		Update(movie *Movie, r *http.Request) error
+		Delete(id int64, r *http.Request) error
 	}
 }
 
