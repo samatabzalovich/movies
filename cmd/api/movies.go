@@ -24,7 +24,7 @@ func (app *application) showMovieHandler(w http.ResponseWriter, r *http.Request)
 		Title:     "Casablanca",
 		Runtime:   102,
 		Genres:    []string{"drama", "romance", "war"},
-		Version:   1,
+		Version:   "qwdqwdjkjqkwdqwdjdnq",
 	}
 	err = app.writeJSON(w, http.StatusOK, envelope{"movie": movie}, nil)
 	if err != nil {

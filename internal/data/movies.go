@@ -14,7 +14,7 @@ type Movie struct {
 	Year      int32     `json:"year,omitempty"`
 	Runtime   Runtime   `json:"runtime,omitempty"`
 	Genres    []string  `json:"genres,omitempty"`
-	Version   int32     `json:"version"`
+	Version   string    `json:"version"`
 }
 
 func ValidateMovie(v *validator.Validator, movie *Movie) {
