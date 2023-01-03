@@ -5,11 +5,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"time"
 )
+
+type Director struct {
+	ID      int64  `json:"id,omitempty"`
+	Name    string `json:"name"`
+	MovieId int64  `json:"movieId"`
+}
 
 type Movie struct {
 	ID        int64     `json:"id"`
@@ -52,13 +59,16 @@ func (m MovieModel) Insert(movie *Movie, r *http.Request) error {
 	// the movie struct. Declaring this slice immediately next to our SQL query helps to
 	// make it nice and clear *what values are being used where* in the query.
 	args := []any{movie.Title, movie.Year, movie.Runtime, movie.Genres}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
 	// Use the QueryRow() method to execute the SQL query on our connection pool,
 	// passing in the args slice as a variadic parameter and scanning the system-
 	// generated id, created_at and version values into the movie struct.
-	return m.DB.QueryRow(r.Context(), query, args...).Scan(&movie.ID, &movie.CreatedAt, &movie.Version)
+	return m.DB.QueryRow(ctx, query, args...).Scan(&movie.ID, &movie.CreatedAt, &movie.Version)
 }
 
-func (m MovieModel) Get(id int64) (*Movie, error) {
+func (m MovieModel) Get(id int64, r *http.Request) (*Movie, error) {
 	// The PostgreSQL bigserial type that we're using for the movie ID starts
 	// auto-incrementing at 1 by default, so we know that no movies will have ID values
 	// less than that. To avoid making an unnecessary database call, we take a shortcut
@@ -76,7 +86,15 @@ func (m MovieModel) Get(id int64) (*Movie, error) {
 	// as a placeholder parameter, and scan the response data into the fields of the
 	// Movie struct. Importantly, notice that we need to convert the scan target for the
 	// genres column using the pq.Array() adapter function again.
-	err := m.DB.QueryRow(context.Background(), query, id).Scan(
+	// Use the context.WithTimeout() function to create a context.Context which carries a
+	// 3-second timeout deadline. Note that we're using the empty context.Background()
+	// as the 'parent' context.
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	// Importantly, use defer to make sure that we cancel the context before the Get()
+	// method returns.
+	defer cancel()
+
+	err := m.DB.QueryRow(ctx, query, id).Scan(
 		&movie.ID,
 		&movie.CreatedAt,
 		&movie.Title,
@@ -109,7 +127,7 @@ func (m MovieModel) Update(movie *Movie, r *http.Request) error {
 	query := `
 		UPDATE movies
 			SET title = $1, year = $2, runtime = $3, genres = $4, version = uuid_generate_v4()
-		WHERE id = $5
+		WHERE id = $5 AND version = $6
 		RETURNING version`
 	// Create an args slice containing the values for the placeholder parameters.
 	args := []any{
@@ -118,10 +136,23 @@ func (m MovieModel) Update(movie *Movie, r *http.Request) error {
 		movie.Runtime,
 		movie.Genres,
 		movie.ID,
+		movie.Version,
 	}
-	// Use the QueryRow() method to execute the query, passing in the args slice as a
-	// variadic parameter and scanning the new version value into the movie struct.
-	return m.DB.QueryRow(r.Context(), query, args...).Scan(&movie.Version)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	err := m.DB.QueryRow(ctx, query, args...).Scan(&movie.Version)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrEditConflict
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrEditConflict
+		default:
+			return err
+		}
+	}
+	return nil
 }
 
 // Add a placeholder method for deleting a specific record from the movies table.
@@ -138,7 +169,9 @@ func (m MovieModel) Delete(id int64, r *http.Request) error {
 	// the value for the placeholder parameter. The Exec() method returns a sql.Result
 	// object.
 	var movie Movie
-	rows := m.DB.QueryRow(r.Context(), query, id)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	rows := m.DB.QueryRow(ctx, query, id)
 	err := rows.Scan(
 		&movie.ID,
 		&movie.CreatedAt,
@@ -164,12 +197,79 @@ func (m MovieModel) Delete(id int64, r *http.Request) error {
 	return nil
 }
 
+// Create a new GetAll() method which returns a slice of movies. Although we're not
+// using them right now, we've set this up to accept the various filter parameters as
+// arguments.
+func (m MovieModel) GetAll(title string, genres []string, filters Filters, r *http.Request) ([]*Movie, Metadata, error) {
+	// Construct the SQL query to retrieve all movie records.
+	query := fmt.Sprintf(`
+					SELECT count(*) OVER(), id, created_at, title, year, runtime, genres, version
+					FROM movies
+					WHERE (to_tsvector('simple', title) @@ plainto_tsquery('simple', $1) OR $1 = '')
+					AND (genres @> $2 OR $2 = '{}')
+					ORDER BY %s %s, id ASC
+					LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortDirection())
+
+	// Create a context with a 3-second timeout.
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	args := []any{title, genres, filters.limit(), filters.offset()}
+	// Use QueryContext() to execute the query. This returns a sql.Rows resultset
+	// containing the result.
+	rows, err := m.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, Metadata{}, err // Update this to return an empty Metadata struct.
+	}
+
+	// Importantly, defer a call to rows.Close() to ensure that the resultset is closed
+	// before GetAll() returns.
+	defer rows.Close()
+	// Initialize an empty slice to hold the movie data.
+	// Declare a totalRecords variable.
+	totalRecords := 0
+	movies := []*Movie{}
+	// Use rows.Next to iterate through the rows in the resultset.
+	for rows.Next() {
+		// Initialize an empty Movie struct to hold the data for an individual movie.
+		var movie Movie
+		// Scan the values from the row into the Movie struct. Again, note that we're
+		// using the pq.Array() adapter on the genres field here.
+		err := rows.Scan(
+			&totalRecords, // Scan the count from the window function into totalRecords.
+			&movie.ID,
+			&movie.CreatedAt,
+			&movie.Title,
+			&movie.Year,
+			&movie.Runtime,
+			&movie.Genres,
+			&movie.Version,
+		)
+
+		if err != nil {
+			return nil, Metadata{}, err // Update this to return an empty Metadata struct.
+		}
+
+		// Add the Movie struct to the slice.
+		movies = append(movies, &movie)
+	}
+	// When the rows.Next() loop has finished, call rows.Err() to retrieve any error
+	// that was encountered during the iteration.
+	if err = rows.Err(); err != nil {
+		return nil, Metadata{}, err // Update this to return an empty Metadata struct.
+	}
+	// Generate a Metadata struct, passing in the total record count and pagination
+	// parameters from the client.
+	metadata := calculateMetadata(totalRecords, filters.Page, filters.PageSize)
+	// Include the metadata struct when returning.
+	return movies, metadata, nil
+}
+
 type MockMovieModel struct{}
 
 func (m MockMovieModel) Insert(movie *Movie, r *http.Request) error {
 	return nil
 }
-func (m MockMovieModel) Get(id int64) (*Movie, error) {
+func (m MockMovieModel) Get(id int64, r *http.Request) (*Movie, error) {
 	// Mock the action...
 	return nil, nil
 }
@@ -180,4 +280,7 @@ func (m MockMovieModel) Update(movie *Movie, r *http.Request) error {
 func (m MockMovieModel) Delete(id int64, r *http.Request) error {
 	// Mock the action...
 	return nil
+}
+func (m MockMovieModel) GetAll(title string, genres []string, filters Filters, r *http.Request) ([]*Movie, Metadata, error) {
+	return nil, Metadata{}, nil
 }

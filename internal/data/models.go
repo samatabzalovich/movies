@@ -10,6 +10,7 @@ import (
 // looking up a movie that doesn't exist in our database.
 var (
 	ErrRecordNotFound = errors.New("record not found")
+	ErrEditConflict   = errors.New("edit conflict")
 )
 
 // Create a Models struct which wraps the MovieModel. We'll add other models to this,
@@ -17,9 +18,10 @@ var (
 type Models struct {
 	Movies interface {
 		Insert(movie *Movie, r *http.Request) error
-		Get(id int64) (*Movie, error)
+		Get(id int64, r *http.Request) (*Movie, error)
 		Update(movie *Movie, r *http.Request) error
 		Delete(id int64, r *http.Request) error
+		GetAll(title string, genres []string, filters Filters, r *http.Request) ([]*Movie, Metadata, error)
 	}
 }
 
