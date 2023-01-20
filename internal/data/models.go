@@ -23,19 +23,29 @@ type Models struct {
 		Delete(id int64, r *http.Request) error
 		GetAll(title string, genres []string, filters Filters, r *http.Request) ([]*Movie, Metadata, error)
 	}
+	Users interface {
+		Insert(user *User, r *http.Request) error
+		GetByEmail(email string, r *http.Request) (*User, error)
+		Update(user *User, r *http.Request) error
+	}
 }
 
 // For ease of use, we also add a New() method which returns a Models struct containing
 // the initialized MovieModel.
 func NewModels(db *pgxpool.Pool) Models {
 	m := MovieModel{DB: db}
+	u := UserModel{
+		DB: db,
+	}
 	return Models{
 		Movies: m,
+		Users:  u,
 	}
 }
 
 func NewMockModels() Models {
 	return Models{
 		Movies: MockMovieModel{},
+		Users:  MockUserModel{},
 	}
 }

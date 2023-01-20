@@ -12,12 +12,6 @@ import (
 	"time"
 )
 
-type Director struct {
-	ID      int64  `json:"id,omitempty"`
-	Name    string `json:"name"`
-	MovieId int64  `json:"movieId"`
-}
-
 type Movie struct {
 	ID        int64     `json:"id"`
 	CreatedAt time.Time `json:"-"`

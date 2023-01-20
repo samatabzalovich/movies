@@ -3,12 +3,14 @@ package main
 import (
 	"awesomeProject2/internal/data"
 	"awesomeProject2/internal/jsonlog"
+	"awesomeProject2/internal/mailer"
 	"context" // New import
 	"flag"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -28,23 +30,33 @@ type config struct {
 		maxIdleConns int
 		maxIdleTime  string
 	}
-	// Add a new limiter struct containing fields for the requests-per-second and burst
-	// values, and a boolean field which we can use to enable/disable rate limiting
-	// altogether.
 	limiter struct {
+		enabled bool
 		rps     float64
 		burst   int
-		enabled bool
+	}
+	smtp struct {
+		host     string
+		port     int
+		username string
+		password string
+		sender   string
 	}
 }
 
 // Define an application struct to hold the dependencies for our HTTP handlers, helpers,
 // and middleware. At the moment this only contains a copy of the config struct and a
 // logger, but it will grow to include a lot more as our build progresses.
+// Update the application struct to hold a new Mailer instance.
+// Include a sync.WaitGroup in the application struct. The zero-value for a
+// sync.WaitGroup type is a valid, useable, sync.WaitGroup with a 'counter' value of 0,
+// so we don't need to do anything else to initialize it before we can use it.
 type application struct {
 	config config
 	logger *jsonlog.Logger
 	models data.Models
+	mailer mailer.Mailer
+	wg     sync.WaitGroup
 }
 
 func main() {
@@ -64,6 +76,15 @@ func main() {
 	flag.Float64Var(&cfg.limiter.rps, "limiter-rps", 2, "Rate limiter maximum requests per second")
 	flag.IntVar(&cfg.limiter.burst, "limiter-burst", 4, "Rate limiter maximum burst")
 	flag.BoolVar(&cfg.limiter.enabled, "limiter-enabled", true, "Enable rate limiter")
+	// Read the SMTP server configuration settings into the config struct, using the
+	// Mailtrap settings as the default values. IMPORTANT: If you're following along,
+	// make sure to replace the default values for smtp-username and smtp-password
+	// with your own Mailtrap credentials.
+	flag.StringVar(&cfg.smtp.host, "smtp-host", "smtp.office365.com", "SMTP host")
+	flag.IntVar(&cfg.smtp.port, "smtp-port", 587, "SMTP port")
+	flag.StringVar(&cfg.smtp.username, "smtp-username", "211387@astanait.edu.kz", "SMTP username")
+	flag.StringVar(&cfg.smtp.password, "smtp-password", "190704Ibraev", "SMTP password")
+	flag.StringVar(&cfg.smtp.sender, "smtp-sender", "211387@astanait.edu.kz>", "SMTP sender")
 
 	flag.Parse()
 	// Initialize a new jsonlog.Logger which writes any messages *at or above* the INFO
@@ -83,10 +104,13 @@ func main() {
 	logger.PrintInfo("database connection pool established", nil)
 	// Use the data.NewModels() function to initialize a Models struct, passing in the
 	// connection pool as a parameter.
+	// Initialize a new Mailer instance using the settings from the command line
+	// flags, and add it to the application struct.
 	app := &application{
 		config: cfg,
 		logger: logger,
 		models: data.NewModels(db),
+		mailer: mailer.New(cfg.smtp.host, cfg.smtp.port, cfg.smtp.username, cfg.smtp.password, cfg.smtp.sender),
 	}
 
 	srv := &http.Server{
@@ -103,10 +127,11 @@ func main() {
 		"addr": srv.Addr,
 		"env":  cfg.env,
 	})
-	err = srv.ListenAndServe()
-	// Use the PrintFatal() method to log the error and exit.
-	logger.PrintFatal(err, nil)
-
+	// Call app.serve() to start the server.
+	err = app.serve()
+	if err != nil {
+		logger.PrintFatal(err, nil)
+	}
 }
 
 // The openDB() function returns a sql.DB connection pool.
@@ -148,3 +173,5 @@ func openDB(cfg config) (*pgxpool.Pool, error) {
 
 	return db, nil
 }
+
+// go run ./cmd/api -smtp-host="smtp.office365.com" -smtp-username="211387@astanait.edu.kz" -smtp-password="190704Ibraev" -smtp-sender="" -smtp-port=587
