@@ -3,8 +3,9 @@ package data
 import (
 	"awesomeProject2/internal/validator"
 	"context"
-	"database/sql"
+	"crypto/sha256"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 	"net/http"
@@ -150,7 +151,7 @@ WHERE email = $1`
 	)
 	if err != nil {
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, pgx.ErrNoRows):
 			return nil, ErrRecordNotFound
 		default:
 			return nil, err
@@ -183,15 +184,58 @@ RETURNING version`
 	err := m.DB.QueryRow(ctx, query, args...).Scan(&user.Version)
 	if err != nil {
 		switch {
-		case err.Error() == `pq: duplicate key value violates unique constraint "users_email_key"`:
+		case err.Error() == `ERROR: duplicate key value violates unique constraint "users_email_key" (SQLSTATE 23505)`:
 			return ErrDuplicateEmail
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, pgx.ErrNoRows):
 			return ErrEditConflict
 		default:
 			return err
 		}
 	}
 	return nil
+}
+func (m UserModel) GetForToken(tokenScope, tokenPlaintext string, r *http.Request) (*User, error) {
+	// Calculate the SHA-256 hash of the plaintext token provided by the client.
+	// Remember that this returns a byte *array* with length 32, not a slice.
+	tokenHash := sha256.Sum256([]byte(tokenPlaintext))
+	// Set up the SQL query.
+	query := `
+SELECT users.id, users.created_at, users.name, users.email, users.password_hash, users.activated, users.version
+FROM users
+INNER JOIN tokens
+ON users.id = tokens.user_id
+WHERE tokens.hash = $1
+AND tokens.scope = $2
+AND tokens.expiry > $3`
+	// Create a slice containing the query arguments. Notice how we use the [:] operator
+	// to get a slice containing the token hash, rather than passing in the array (which
+	// is not supported by the pq driver), and that we pass the current time as the
+	// value to check against the token expiry.
+	args := []any{tokenHash[:], tokenScope, time.Now()}
+	var user User
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	// Execute the query, scanning the return values into a User struct. If no matching
+	// record is found we return an ErrRecordNotFound error.
+	err := m.DB.QueryRow(ctx, query, args...).Scan(
+		&user.ID,
+		&user.CreatedAt,
+		&user.Name,
+		&user.Email,
+		&user.Password.hash,
+		&user.Activated,
+		&user.Version,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil, ErrRecordNotFound
+		default:
+			return nil, err
+		}
+	}
+	// Return the matching user.
+	return &user, nil
 }
 
 type MockUserModel struct{}
@@ -203,7 +247,25 @@ func (m MockUserModel) Insert(user *User, r *http.Request) error {
 func (m MockUserModel) GetByEmail(email string, r *http.Request) (*User, error) {
 	return nil, nil
 }
+func (m MockUserModel) GetForToken(tokenScope, tokenPlaintext string, r *http.Request) (*User, error) {
+	return nil, nil
+}
 
 func (m MockUserModel) Update(user *User, r *http.Request) error {
+	return nil
+}
+
+type MockTokenModel struct{}
+
+// New(userID int64, ttl time.Duration, scope string) (*Token, error)
+func (m MockTokenModel) New(userID int64, ttl time.Duration, scope string) (*Token, error) {
+	return nil, nil
+}
+
+func (m MockTokenModel) Insert(token *Token) error {
+	return nil
+}
+
+func (m MockTokenModel) DeleteAllForUser(scope string, userID int64) error {
 	return nil
 }
